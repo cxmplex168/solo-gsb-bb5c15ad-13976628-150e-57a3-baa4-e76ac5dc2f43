@@ -89,6 +89,45 @@ pytest
 - 多边形无效（自相交、面积为零、类型不是 Polygon/MultiPolygon、GeoJSON 无法解析）；
 - `active_to` 不晚于 `active_from`、`max_alt` 小于 `min_alt`、航点少于 2 个等参数错误。
 
+### POST /audit/geojson
+
+**请求体**与 `POST /audit` 完全相同，判定逻辑与结果顺序也完全一致，区别仅在于把每条违规区间输出为一个 GeoJSON Feature：
+
+- `entry`：几何为 `LineString`，坐标依次为**进入点 → 区间跨段途经的所有航迹顶点 → 离开点**（单航段时只有进入点和离开点）；
+- `graze`：进入点与离开点重合时为 `Point`（如掠过顶点），否则为从进入点到离开点的 `LineString`（如沿边界滑行）。
+
+所有坐标均为 `[经度, 纬度, 高度]`。每个 Feature 的 `properties` 携带 `zone_id`、`kind`、`entry_time`、`exit_time`、`segment_start`、`segment_end`；`features` 顺序与 `/audit` 的 `violations` 一致。
+
+**响应 200**（以上面 /audit 的例子为例）
+
+```json
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [116.30, 39.905, 50.0],
+          [116.32, 39.905, 50.0]
+        ]
+      },
+      "properties": {
+        "zone_id": "nfz-1",
+        "kind": "entry",
+        "entry_time": "2026-09-22T10:06:00Z",
+        "exit_time": "2026-09-22T10:18:00Z",
+        "segment_start": 0,
+        "segment_end": 0
+      }
+    }
+  ]
+}
+```
+
+无违规时返回 `{"type": "FeatureCollection", "features": []}`。422 校验规则与 `/audit` 相同。
+
 ## 判定规则
 
 对每一条**相邻航段**（而非仅航点）逐一审计。航段上任意点用分数 f ∈ [0,1] 表示，位置、时间、高度均为 f 的线性函数，因此三个条件各自对应一个 f 区间：
@@ -103,11 +142,13 @@ pytest
 
 ```
 app/
-  main.py    # FastAPI 入口与路由
-  models.py  # 请求/响应模型与参数校验
-  audit.py   # 核心审计算法（平面求交 + f 域三窗口求交 + 区间合并）
+  main.py     # FastAPI 入口与路由（/audit、/audit/geojson）
+  models.py   # 请求/响应模型与参数校验（含 GeoJSON 响应模型）
+  audit.py    # 核心审计算法（平面求交 + f 域三窗口求交 + 区间合并）
+  geojson.py  # 违规区间 → GeoJSON FeatureCollection 转换
 tests/
-  test_audit.py
+  test_audit.py     # POST /audit
+  test_geojson.py   # POST /audit/geojson
 Dockerfile
 docker-compose.yml
 ```

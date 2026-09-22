@@ -85,3 +85,27 @@ class Violation(BaseModel):
 class AuditResponse(BaseModel):
     violation_count: int
     violations: List[Violation]
+
+
+class ViolationProperties(BaseModel):
+    """GeoJSON Feature 的属性，与 Violation 的标量字段一一对应。"""
+
+    zone_id: str
+    kind: Literal["entry", "graze"]
+    entry_time: datetime
+    exit_time: datetime
+    segment_start: int
+    segment_end: int
+
+
+class GeoJsonFeature(BaseModel):
+    type: Literal["Feature"] = "Feature"
+    geometry: Dict[str, Any] = Field(
+        ..., description="Point 或 LineString，坐标为 [经度, 纬度, 高度]"
+    )
+    properties: ViolationProperties
+
+
+class GeoJsonFeatureCollection(BaseModel):
+    type: Literal["FeatureCollection"] = "FeatureCollection"
+    features: List[GeoJsonFeature]
