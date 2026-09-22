@@ -1,6 +1,9 @@
 # 无人机航迹禁飞区审计服务
 
-基于 FastAPI + Shapely 的航迹合规审计服务。输入按时间排序的航点序列与带生效时段、高度范围的 GeoJSON 禁飞区，输出按时间排序的违规区间。
+基于 FastAPI + Shapely 的航迹合规审计服务。输入按时间排序的航点序列与带生效时段、高度范围的 GeoJSON 禁飞区，输出按时间排序的违规区间。提供两种结果形式：
+
+- `POST /audit`：JSON 结构化结果（含插值后的进入/离开位置）；
+- `POST /audit/geojson`：GeoJSON `FeatureCollection`，请求体与判定结果与 `/audit` 完全一致，可直接在地图上渲染。
 
 ## 快速启动（单条命令，端口 8000）
 
@@ -89,6 +92,55 @@ pytest
 - 多边形无效（自相交、面积为零、类型不是 Polygon/MultiPolygon、GeoJSON 无法解析）；
 - `active_to` 不晚于 `active_from`、`max_alt` 小于 `min_alt`、航点少于 2 个等参数错误。
 
+### POST /audit/geojson
+
+请求体与 `POST /audit` **完全相同**，判定逻辑与结果顺序也一致，仅输出形式不同——每条违规区间输出为一个 GeoJSON Feature：
+
+- **entry**：`LineString`，包含进入点到离开点之间跨越的**全部航迹顶点**
+  （进入插值点 → 区间内途经的各航点 → 离开插值点；首尾相接合并处的重复顶点会相邻去重）。
+- **graze**：进入点与离开点重合时输出 `Point`（如掠过顶点）；否则输出连接进入点与离开点的 `LineString`（如沿边界滑行），不含中间航点。
+
+坐标统一为三维 `[经度, 纬度, 高度]`，高度同样为插值结果。每个 Feature 的 `properties` 携带：
+
+| 属性 | 含义 |
+| --- | --- |
+| `zone_id` | 禁飞区标识 |
+| `kind` | `entry` / `graze` |
+| `entry_time` | 进入时刻（ISO 8601，UTC 输出为 `Z`） |
+| `exit_time` | 离开时刻 |
+| `segment_start` | 进入点所在航段下标（从 0 开始） |
+| `segment_end` | 离开点所在航段下标 |
+
+**响应 200**（上例横穿区域，单航段）
+
+```json
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [116.30, 39.905, 50.0],
+          [116.32, 39.905, 50.0]
+        ]
+      },
+      "properties": {
+        "zone_id": "nfz-1",
+        "kind": "entry",
+        "entry_time": "2026-09-22T10:06:00Z",
+        "exit_time": "2026-09-22T10:18:00Z",
+        "segment_start": 0,
+        "segment_end": 0
+      }
+    }
+  ]
+}
+```
+
+若航迹在区内途经航点（跨多航段合并为一条 entry），`coordinates` 会包含这些航迹顶点；掠过顶点的 graze 则为 `"geometry": {"type": "Point", "coordinates": [lon, lat, alt]}`。无违规时返回 `{"type": "FeatureCollection", "features": []}`。422 校验与 `POST /audit` 完全相同。
+
 ## 判定规则
 
 对每一条**相邻航段**（而非仅航点）逐一审计。航段上任意点用分数 f ∈ [0,1] 表示，位置、时间、高度均为 f 的线性函数，因此三个条件各自对应一个 f 区间：
@@ -103,11 +155,13 @@ pytest
 
 ```
 app/
-  main.py    # FastAPI 入口与路由
+  main.py    # FastAPI 入口与路由（/audit、/audit/geojson）
   models.py  # 请求/响应模型与参数校验
   audit.py   # 核心审计算法（平面求交 + f 域三窗口求交 + 区间合并）
+  geojson.py # 违规区间 -> GeoJSON FeatureCollection
 tests/
   test_audit.py
+  test_geojson.py
 Dockerfile
 docker-compose.yml
 ```
